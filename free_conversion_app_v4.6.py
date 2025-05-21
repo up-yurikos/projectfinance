@@ -1,16 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-仕訳＋月次推移ダッシュボード  v6.9  (2025-05-21)
-──────────────────────────────────────────────
-■ 変更点
-1. CSV アップロード UI を `st.sidebar.expander` で折りたたみ化
-2. フィルター UI に
-   ・取引担当者
-   ・Industry
-   ・Industry詳細
-   を追加（複数選択可）
-"""
-
 import streamlit as st
 import pandas as pd
 import io, re
