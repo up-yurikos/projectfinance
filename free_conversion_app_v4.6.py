@@ -1,30 +1,17 @@
 import streamlit as st
 import pandas as pd
-import zipfile, io, re
+import zipfile, io, re, tempfile, gdown, os
 from datetime import date
 from dateutil.relativedelta import relativedelta
 
 # ──────────────────────────────────────────────
 # ページ設定
 # ──────────────────────────────────────────────
-st.set_page_config(page_title="プロジェクト収益 v6.9",
-                   layout="wide")
+st.set_page_config(page_title="プロジェクト収益 v7.0", layout="wide")
 
 # ──────────────────────────────────────────────
 # ユーティリティ
 # ──────────────────────────────────────────────
-def load_csv(uploaded_file):
-    if uploaded_file is None:
-        return None
-    for enc in ("utf-8-sig", "cp932", "utf-8"):
-        try:
-            uploaded_file.seek(0)
-            return pd.read_csv(io.StringIO(uploaded_file.read().decode(enc)))
-        except Exception:
-            continue
-    return None
-
-
 def detect_col(cols, patterns):
     for p in patterns:
         hits = [c for c in cols if re.sub(r"\s+", "", str(c)).casefold() == p]
@@ -40,27 +27,92 @@ def normalize_id(x):
     return None if s == "" or s.lower() in {"nan", "none"} else s
 
 
-# ──────────────────────────────────────────────
-# CSV アップロード UI（折りたたみ）
-# ──────────────────────────────────────────────
-with st.sidebar.expander("📂 CSV アップロード", expanded=True):
-    uploaded_file = st.file_uploader("仕訳帳データ", type=["csv","zip"])
-    master_file   = st.file_uploader("取引マスタ", type="csv")
-    cost_file     = st.file_uploader("稼働コスト", type="csv")
+# ── CSV / ZIP ローダ ---------------------------------------------------------
+def load_csv(uploaded):
+    """(1) 単体 CSV  (2) ZIP 内 CSV を DataFrame で返す"""
+    if uploaded is None:
+        return None
 
-if uploaded_file is None:
-    st.sidebar.warning("仕訳帳データをアップロードしてください。")
-    st.stop()
+    # ZIP か判定
+    if uploaded.name.lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(uploaded) as zf:
+                csv_list = [n for n in zf.namelist()
+                            if n.lower().endswith(".csv") and not n.endswith("/")]
+                if not csv_list:
+                    st.error("ZIP に CSV が見つかりません。")
+                    return None
+                target = csv_list[0] if len(csv_list) == 1 else \
+                         st.selectbox("ZIP 内 CSV を選択してください", csv_list)
+                with zf.open(target) as fp:
+                    for enc in ("utf-8-sig", "cp932", "utf-8"):
+                        try:
+                            txt = fp.read().decode(enc)
+                            return pd.read_csv(io.StringIO(txt))
+                        except Exception:
+                            fp.seek(0)
+        except zipfile.BadZipFile:
+            st.error("ZIP ファイルが壊れています。")
+            return None
+
+    # 通常の CSV
+    for enc in ("utf-8-sig", "cp932", "utf-8"):
+        try:
+            txt = uploaded.read().decode(enc)
+            return pd.read_csv(io.StringIO(txt))
+        except Exception:
+            uploaded.seek(0)
+
+    st.error("CSV の読み込みに失敗しました。文字コードを確認してください。")
+    return None
+
+
+# ── Google Drive 共有リンクからダウンロード ---------------------------------
+def read_gdrive_csv_gdown(share_url: str, **kwargs) -> pd.DataFrame:
+    """Google Drive の共有リンクを gdown でダウンロードし DataFrame を返す"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+        gdown.download(url=share_url, output=tmp.name, quiet=False, fuzzy=True)
+        return pd.read_csv(tmp.name, **kwargs)
+
+# ──────────────────────────────────────────────
+# 仕訳帳データ取得 UI（CSV / ZIP / Google Drive）
+# ──────────────────────────────────────────────
+with st.sidebar.expander("📂 仕訳帳データの取得", expanded=True):
+    tab_local, tab_drive = st.tabs(["ローカルアップロード", "Google Drive"])
+
+    with tab_local:
+        uploaded_file = st.file_uploader("CSV または ZIP を選択", type=["csv", "zip"])
+
+    with tab_drive:
+        gdrive_url = st.text_input(
+            "Drive 共有リンクを貼って Enter",
+            placeholder="https://drive.google.com/file/d/…/view?usp=sharing"
+        )
+        if gdrive_url and not gdrive_url.startswith("http"):
+            st.warning("リンク形式が正しくありません。")
+            gdrive_url = ""
+
+# マスタ / コストは従来どおり
+master_file = st.sidebar.file_uploader("取引マスタ", type="csv")
+cost_file   = st.sidebar.file_uploader("稼働コスト", type="csv")
 
 # ──────────────────────────────────────────────
 # 仕訳帳読込
 # ──────────────────────────────────────────────
-df_src = load_csv(uploaded_file)
+df_src = None
+if uploaded_file is not None:
+    df_src = load_csv(uploaded_file)
+elif gdrive_url:
+    try:
+        df_src = read_gdrive_csv_gdown(gdrive_url, encoding="cp932")
+    except Exception as e:
+        st.error(f"Google Drive 読み込み失敗: {e}")
+
 if df_src is None:
-    st.error("仕訳帳CSV の読み込みに失敗しました。")
     st.stop()
 
-df_src["取引日"] = pd.to_datetime(df_src.get("取引日"), errors="coerce")
+st.success(f"仕訳帳を読み込みました ({len(df_src):,} 行)")
+df_src["取引日"] = pd.to_datetime(df_src["取引日"], errors="coerce")
 
 # ──────────────────────────────────────────────
 # 取引マスタ読込
@@ -71,28 +123,19 @@ if master_file:
     if df_master is not None:
         df_master.columns = df_master.columns.map(str.strip)
 
-        id_col   = detect_col(df_master.columns,
-                              ["取引id","レコードid","recordid","dealid"])
-        name_col = detect_col(df_master.columns,
-                              ["取引先","会社名","customer","client"])
-        amt_col  = detect_col(df_master.columns,
-                              ["金額","売上金額","見積金額","amount"])
-        title_col   = detect_col(df_master.columns,
-                                 ["取引名","案件名","dealname","title"])
-        owner_col   = detect_col(df_master.columns,
-                                 ["取引担当者","担当者","owner","sales"])
-        ind_col     = detect_col(df_master.columns,
-                                 ["industry","業界"])
-        ind_det_col = detect_col(df_master.columns,
-                                 ["industry詳細","industrydetail","業界詳細"])
+        id_col   = detect_col(df_master.columns, ["取引id","レコードid","recordid","dealid"])
+        name_col = detect_col(df_master.columns, ["取引先","会社名","customer","client"])
+        amt_col  = detect_col(df_master.columns, ["金額","売上金額","見積金額","amount"])
+        title_col = detect_col(df_master.columns, ["取引名","案件名","dealname","title"])
+        owner_col = detect_col(df_master.columns, ["取引担当者","担当者","owner","sales"])
+        ind_col   = detect_col(df_master.columns, ["industry","業界"])
+        ind_det_col = detect_col(df_master.columns, ["industry詳細","industrydetail","業界詳細"])
 
         if id_col and amt_col:
             df_master[id_col]  = df_master[id_col].map(normalize_id)
-            df_master[amt_col] = pd.to_numeric(df_master[amt_col],
-                                               errors="coerce").fillna(0)
+            df_master[amt_col] = pd.to_numeric(df_master[amt_col], errors="coerce").fillna(0)
 
-            keep = {id_col: "取引コード",
-                    amt_col: "マスター金額"}
+            keep = {id_col: "取引コード", amt_col: "マスター金額"}
             if name_col:   keep[name_col]   = "マスター取引先"
             if title_col:  keep[title_col]  = "取引名"
             if owner_col:  keep[owner_col]  = "取引担当者"
@@ -133,47 +176,40 @@ combo = pd.concat([df_sales_out, df_exp_out], ignore_index=True)
 # ──────────────────────────────────────────────
 # pivot → daily
 # ──────────────────────────────────────────────
-daily = (combo
-         .pivot_table(index="取引コード",
-                      columns="勘定科目",
-                      values="金額",
-                      aggfunc="sum",
-                      fill_value=0)
+daily = (combo.pivot_table(index="取引コード",
+                           columns="勘定科目",
+                           values="金額",
+                           aggfunc="sum",
+                           fill_value=0)
          .reset_index())
 
 meta = (combo.groupby("取引コード")
              .agg({"日付": ["min","max"], "取引先":"first"})
              .reset_index())
 meta.columns = ["取引コード","日付（最小）","日付（最大）","取引先"]
-
 daily = daily.merge(meta, on="取引コード", how="left")
 if "売上高" not in daily.columns:
     daily["売上高"] = 0
 
 # ──────────────────────────────────────────────
-# 稼働コスト統合（人件費・稼働取引先）
+# 稼働コスト統合
 # ──────────────────────────────────────────────
 if cost_file:
     df_cost = load_csv(cost_file)
     if df_cost is not None:
         df_cost.columns = df_cost.columns.map(str.strip)
-        id_c   = detect_col(df_cost.columns,
-                            ["取引id","レコードid","recordid"])
-        cost_c = detect_col(df_cost.columns,
-                            ["稼働コスト","人件費","cost"])
-        name_c = detect_col(df_cost.columns,
-                            ["会社名","取引先","client","customer"])
+        id_c   = detect_col(df_cost.columns, ["取引id","レコードid","recordid"])
+        cost_c = detect_col(df_cost.columns, ["稼働コスト","人件費","cost"])
+        name_c = detect_col(df_cost.columns, ["会社名","取引先","client","customer"])
         if id_c and cost_c:
             df_cost[id_c] = df_cost[id_c].map(normalize_id)
             df_cost = df_cost.dropna(subset=[id_c])
-            df_cost["人件費"] = pd.to_numeric(df_cost[cost_c],
-                                              errors="coerce").fillna(0)
+            df_cost["人件費"] = pd.to_numeric(df_cost[cost_c], errors="coerce").fillna(0)
 
             agg = {"人件費": "sum"}
             if name_c:
                 agg[name_c] = "first"
-            cost_info = (df_cost
-                         .groupby(id_c, as_index=False)
+            cost_info = (df_cost.groupby(id_c, as_index=False)
                          .agg(agg)
                          .rename(columns={id_c:"取引コード"}))
             if name_c:
@@ -225,25 +261,22 @@ daily.rename(columns={"取引コード":"レコードID"}, inplace=True)
 # フィルター UI
 # ──────────────────────────────────────────────
 st.sidebar.markdown("### 🔍 フィルター設定")
-
 id_val = st.sidebar.text_input("取引ID（部分一致可）", "")
 
 min_date = df_src["取引日"].min().date()
 max_date = df_src["取引日"].max().date()
-start_date, end_date = st.sidebar.date_input("期間範囲",
-                                             [min_date, max_date])
+start_date, end_date = st.sidebar.date_input("期間範囲", [min_date, max_date])
 
-# 追加フィルター（複数選択）
 owner_sel, ind_sel, ind_det_sel = [], [], []
 if "取引担当者" in daily.columns:
-    options = sorted(daily["取引担当者"].dropna().unique())
-    owner_sel = st.sidebar.multiselect("取引担当者", options)
+    owner_sel = st.sidebar.multiselect("取引担当者",
+                                       sorted(daily["取引担当者"].dropna().unique()))
 if "Industry" in daily.columns:
-    options = sorted(daily["Industry"].dropna().unique())
-    ind_sel = st.sidebar.multiselect("Industry", options)
+    ind_sel = st.sidebar.multiselect("Industry",
+                                     sorted(daily["Industry"].dropna().unique()))
 if "Industry詳細" in daily.columns:
-    options = sorted(daily["Industry詳細"].dropna().unique())
-    ind_det_sel = st.sidebar.multiselect("Industry詳細", options)
+    ind_det_sel = st.sidebar.multiselect("Industry詳細",
+                                         sorted(daily["Industry詳細"].dropna().unique()))
 
 # ──────────────────────────────────────────────
 # レコードフィルター
@@ -251,7 +284,6 @@ if "Industry詳細" in daily.columns:
 mask  = daily["レコードID"].str.contains(id_val, na=False)
 mask &= daily["日付（最大）"].dt.date >= start_date
 mask &= daily["日付（最小）"].dt.date <= end_date
-
 if owner_sel:
     mask &= daily["取引担当者"].isin(owner_sel)
 if ind_sel:
@@ -319,23 +351,6 @@ count_series = (df_ms[df_ms["月次売上"]>0]
                 .reindex(time_cols, fill_value=0))
 
 # ──────────────────────────────────────────────
-# 粗利集計表
-# ──────────────────────────────────────────────
-base_cols = ["レコードID","日付（最小）","日付（最大）","取引先"]
-extra_cols = [c for c in ["取引名","取引担当者","Industry","Industry詳細"]
-              if c in df_filtered.columns]
-metric_cols = ["売上高","人件費","外注費",
-               "交際費","旅費交通費","粗利","粗利率"]
-disp_cols = base_cols + extra_cols + metric_cols
-
-disp = df_filtered[disp_cols].copy()
-disp["日付（最小）"] = disp["日付（最小）"].dt.date
-disp["日付（最大）"] = disp["日付（最大）"].dt.date
-for c in ["売上高","人件費","外注費","交際費","旅費交通費","粗利"]:
-    disp[c] = disp[c].map(lambda x: f"{int(x):,}")
-disp["粗利率"] = disp["粗利率"].map(lambda x: f"{x:.1f}%")
-
-# ──────────────────────────────────────────────
 # 表示
 # ──────────────────────────────────────────────
 tab1, tab2 = st.tabs(["📊 Chart view", "📋 Table view"])
@@ -358,17 +373,16 @@ with tab1:
 
 with tab2:
     st.subheader("📄 プロジェクト収益一覧")
-    st.dataframe(disp, use_container_width=True)
+    st.dataframe(df_filtered[["レコードID","取引先","売上高","粗利","粗利率"]], use_container_width=True)
     st.download_button("💾 粗利集計CSV",
-        data=df_filtered[disp_cols].to_csv(index=False, encoding="utf-8-sig"),
+        data=df_filtered.to_csv(index=False, encoding="utf-8-sig"),
         file_name="粗利集計.csv")
 
     st.subheader("📋 月次売上")
     ms_disp = df_sales_p.copy()
     for c in time_cols:
         ms_disp[c] = ms_disp[c].map(lambda x: f"{int(x):,}")
-    st.dataframe(ms_disp[["レコードID","取引先"]+time_cols],
-                 use_container_width=True)
+    st.dataframe(ms_disp[["レコードID","取引先"]+time_cols], use_container_width=True)
     st.download_button("💾 月次売上一覧CSV",
         data=df_sales_p.to_csv(index=False, encoding="cp932"),
         file_name="月次売上一覧.csv")
@@ -377,8 +391,7 @@ with tab2:
     mp_disp = df_profit_p.copy()
     for c in time_cols:
         mp_disp[c] = mp_disp[c].map(lambda x: f"{int(x):,}")
-    st.dataframe(mp_disp[["レコードID","取引先"]+time_cols],
-                 use_container_width=True)
+    st.dataframe(mp_disp[["レコードID","取引先"]+time_cols], use_container_width=True)
     st.download_button("💾 月次粗利一覧CSV",
         data=df_profit_p.to_csv(index=False, encoding="cp932"),
         file_name="月次粗利一覧.csv")
