@@ -77,13 +77,15 @@ def read_gdrive_csv_gdown(share_url: str, **kwargs) -> pd.DataFrame:
 # ──────────────────────────────────────────────
 # 仕訳帳データ取得 UI（CSV / ZIP / Google Drive）
 # ──────────────────────────────────────────────
-with st.sidebar.expander("📂 仕訳帳データの取得", expanded=True):
+with st.sidebar.expander("📂 データアップロード / 選択", expanded=True):
+
+    # === ① 仕訳帳データ (CSV / ZIP / Google Drive) ===========
     tab_local, tab_drive = st.tabs(["ローカルアップロード", "Google Drive"])
 
     with tab_local:
-        uploaded_file = st.file_uploader("CSV または ZIP を選択", type=["csv", "zip"])
-        master_file = st.sidebar.file_uploader("取引マスタ", type="csv")
-        cost_file   = st.sidebar.file_uploader("稼働コスト", type="csv")       
+        uploaded_file = st.file_uploader(
+            "仕訳帳 (CSV または ZIP)", type=["csv", "zip"]
+        )
 
     with tab_drive:
         gdrive_url = st.text_input(
@@ -94,6 +96,11 @@ with st.sidebar.expander("📂 仕訳帳データの取得", expanded=True):
             st.warning("リンク形式が正しくありません。")
             gdrive_url = ""
 
+    st.markdown("---")           # 仕切り線
+
+    # === ② 取引マスタ と ③ 稼働コスト =========================
+    master_file = st.file_uploader("取引マスタ (CSV)", type="csv")
+    cost_file   = st.file_uploader("稼働コスト (CSV)", type="csv")
 
 # ──────────────────────────────────────────────
 # 仕訳帳読込
