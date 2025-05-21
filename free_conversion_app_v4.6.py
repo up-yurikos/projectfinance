@@ -82,6 +82,7 @@ with st.sidebar.expander("📂 仕訳帳データの取得", expanded=True):
 
     with tab_local:
         uploaded_file = st.file_uploader("CSV または ZIP を選択", type=["csv", "zip"])
+        
 
     with tab_drive:
         gdrive_url = st.text_input(
@@ -92,9 +93,9 @@ with st.sidebar.expander("📂 仕訳帳データの取得", expanded=True):
             st.warning("リンク形式が正しくありません。")
             gdrive_url = ""
 
-# マスタ / コストは従来どおり
-master_file = st.sidebar.file_uploader("取引マスタ", type="csv")
-cost_file   = st.sidebar.file_uploader("稼働コスト", type="csv")
+    master_file = st.sidebar.file_uploader("取引マスタ", type="csv")
+    cost_file   = st.sidebar.file_uploader("稼働コスト", type="csv")
+
 
 # ──────────────────────────────────────────────
 # 仕訳帳読込
