@@ -3,6 +3,8 @@ import pandas as pd
 import zipfile, io, re, tempfile, gdown, calendar
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
+from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid.shared import GridUpdateMode
 
 # ──────────────────────────────────────────────
 # ページ設定
@@ -94,8 +96,9 @@ with st.sidebar.expander("📂 データアップロード / 選択", expanded=T
     st.markdown("---")
 
     # 取引マスタ / 稼働コスト
-    master_file = st.file_uploader("取引マスタ (CSV)", type="csv")
     cost_file   = st.file_uploader("稼働コスト (CSV)", type="csv")
+    master_file = st.file_uploader("取引マスタ (CSV)", type="csv")
+
 
 # ──────────────────────────────────────────────
 # 仕訳帳読込
@@ -110,7 +113,6 @@ elif gdrive_url:
         st.error(f"Google Drive 読み込み失敗: {e}")
 if df_src is None:
     st.stop()
-st.success(f"仕訳帳を読み込みました ({len(df_src):,} 行)")
 df_src["取引日"] = pd.to_datetime(df_src["取引日"], errors="coerce")
 
 # 取引マスタ読込 -----------------------------------------------------
@@ -435,22 +437,78 @@ with tab2:
                        file_name="月次粗利一覧.csv")    
 
 # ----- Utilization view ------------------------------------------------------
+# ----- Utilization view ------------------------------------------------------
 with tab3:
-    # ① 標準稼働時間を折りたたみ + 小タイトル
+    # ① 標準稼働時間
+    st.subheader("標準稼働時間 / 月")
     if std_hours_row:
-        with st.expander("標準稼働時間 / 月", expanded=False):
+        with st.expander("標準稼働時間", expanded=False):
             st.caption("平日日数 × 8h")
             st.table(pd.DataFrame([std_hours_row], index=["標準稼働時間(h)"]))
+    else:
+        st.info("稼働コストファイルに稼働時間が無いため利用率を計算できません。")
 
-    # ② 稼働・チャージャビリティ
+    # ② 月次稼働時間とチャージャビリティ
     if not util_hours_pivot.empty:
-        st.subheader("コンサルタント別・月次稼働時間 (h)")
+        st.subheader("月次稼働時間 (h)")
         st.dataframe(util_hours_pivot, use_container_width=True)
 
-        st.subheader("コンサルタント別・チャージャビリティ (%)")
-        pct_fmt = util_pct_pivot.copy()
+        st.subheader("月次稼働率(%)")
+        pct_df = util_pct_pivot.copy()
         for c in util_time_cols:
-            pct_fmt[c] = pct_fmt[c].map(lambda x: f"{x:.0%}")
-        st.dataframe(pct_fmt, use_container_width=True)
+            pct_df[c] = pct_df[c].map(lambda x: f"{x:.0%}")
+        st.dataframe(pct_df, use_container_width=True)
+
+        # ──────────── ここから詳細セクション ────────────
+        st.markdown("---")
+        st.subheader("コンサルタント別稼働率推移と詳細データ")
+
+        # プルダウンでコンサル選択
+        cons_col = util_hours_pivot.columns[0]
+        names    = sorted(util_hours_pivot[cons_col].unique())
+        sel      = st.selectbox("コンサルタントを選択", names)
+
+        # 折れ線グラフ：選択者のチャージャビリティ
+        sel_pct = util_pct_pivot.set_index(cons_col).loc[sel, util_time_cols]
+        df_chart = pd.DataFrame({"稼働率": sel_pct.values}, index=util_time_cols)
+        import altair as alt
+        chart = (
+            alt.Chart(df_chart.reset_index().melt("index"))
+               .mark_line(point=True)
+               .encode(
+                   x=alt.X("index:N", title="年月"),
+                   y=alt.Y("value:Q", axis=alt.Axis(format=".0%", title="稼働率")),
+                   color=alt.value("#1f77b4")
+               )
+               .properties(height=300)
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+        # 詳細テーブル：該当コンサル×全月
+        df_detail = df_cost_raw.copy()
+        df_detail[date_c] = pd.to_datetime(df_detail[date_c], errors="coerce")
+        df_detail["稼働月-月次"] = df_detail[date_c].dt.strftime("%y/%m")
+
+        assign_c = detect_col(df_detail.columns,
+                              ["アサイン履歴名","assignhistory","history"])
+
+        df_det = df_detail[
+            (df_detail[cons_col] == sel) &
+            (df_detail["稼働月-月次"].isin(util_time_cols))
+        ].copy()
+
+        # 数値化 & フォーマット
+        df_det[hours_c] = pd.to_numeric(df_det[hours_c], errors="coerce").fillna(0)
+        df_det[cost_c]  = pd.to_numeric(df_det[cost_c], errors="coerce").fillna(0)
+        df_det["稼働時間"]   = df_det[hours_c].map(lambda x: f"{x:,}")
+        df_det["稼働コスト"] = df_det[cost_c].map(lambda x: f"{int(x):,}")
+
+        # 列順・ヘッダーを日本語化
+        df_det = df_det[["稼働月-月次", id_c, name_c, assign_c, "稼働時間", "稼働コスト"]]
+        df_det.columns = ["稼働月-月次","取引ID","会社名","アサイン履歴名","稼働時間","稼働コスト"]
+
+        st.dataframe(df_det, use_container_width=True)
+        # ──────────── 詳細セクション ここまで ────────────
+
     else:
         st.info("利用率を計算できるデータがありません。")
