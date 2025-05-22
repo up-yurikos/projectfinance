@@ -108,15 +108,11 @@ elif gdrive_url:
         df_src = read_gdrive_csv_gdown(gdrive_url, encoding="cp932")
     except Exception as e:
         st.error(f"Google Drive 読み込み失敗: {e}")
-
 if df_src is None:
     st.stop()
-
 st.success(f"仕訳帳を読み込みました ({len(df_src):,} 行)")
 df_src["取引日"] = pd.to_datetime(df_src["取引日"], errors="coerce")
 
-# 以降: 取引マスタ / 稼働コスト / pivot / フィルター計算 は v7.0 と同じ
-# -------------------------------------------------------------------
 # 取引マスタ読込 -----------------------------------------------------
 master_map = None
 if master_file:
@@ -129,12 +125,14 @@ if master_file:
             df_master[id_col]  = df_master[id_col].map(normalize_id)
             df_master[amt_col] = pd.to_numeric(df_master[amt_col], errors="coerce").fillna(0)
             keep = {id_col:"取引コード", amt_col:"マスター金額"}
-            # 追加列
-            for src, dst in [(["取引先","会社名","customer","client"],"マスター取引先"),
-                             (["取引名","案件名","dealname","title"],"取引名"),
-                             (["取引担当者","担当者","owner","sales"],"取引担当者"),
-                             (["industry","業界"],"Industry"),
-                             (["industry詳細","industrydetail","業界詳細"],"Industry詳細")]:
+            for src, dst in [
+                (["取引先","会社名","customer","client"],"マスター取引先"),
+                (["取引名","案件名","dealname","title"],"取引名"),
+                (["取引担当者","担当者","owner","sales"],"取引担当者"),
+                (["industry","業界"],"Industry"),
+                (["industry詳細","industrydetail","業界詳細"],"Industry詳細"),
+                (["提案商材","proposal","product"],"提案商材")
+            ]:
                 c = detect_col(df_master.columns, src)
                 if c: keep[c] = dst
             master_map = (df_master[list(keep)]
@@ -145,7 +143,7 @@ if master_file:
 # 稼働コスト読込 -----------------------------------------------------
 df_cost_raw = None
 if cost_file:
-    df_cost_raw = load_csv(cost_file)        # 後で Utilization に使う
+    df_cost_raw = load_csv(cost_file)
     if df_cost_raw is not None:
         df_cost_raw.columns = df_cost_raw.columns.map(str.strip)
 
@@ -193,10 +191,16 @@ if df_cost_raw is not None:
         df_cost = df_cost_raw.dropna(subset=[id_c]).copy()
         df_cost["人件費"] = pd.to_numeric(df_cost[cost_c], errors="coerce").fillna(0)
         agg = {"人件費":"sum"}
-        if name_c: agg[name_c] = "稼働取引先"
-        cost_info = (df_cost.groupby(id_c, as_index=False)
-                     .agg(agg)
-                     .rename(columns={id_c:"取引コード"}))
+        if name_c: agg[name_c] = "first"
+        cost_info = (
+            df_cost.groupby(id_c, as_index=False)
+                   .agg(agg)
+                   .rename(columns={
+                        id_c:   "取引コード",
+                        cost_c: "人件費",
+                        **({name_c: "稼働取引先"} if name_c else {})
+                   })
+        )
         daily["取引コード"] = daily["取引コード"].map(normalize_id)
         daily = daily.merge(cost_info, on="取引コード", how="left")
     else:
@@ -286,6 +290,14 @@ df_profit_p = (df_mp.pivot_table(index=["レコードID","取引先"],
                                  values="月次粗利", fill_value=0).reset_index())
 time_cols = sorted(df_ms["年月表示"].unique().tolist())
 
+for df_num in (df_sales_p, df_profit_p):
+    for col in time_cols:
+        df_num[col] = (df_num[col]
+                       .astype(str)            # 念のため str に統一
+                       .str.replace(",", "")   # カンマ除去
+                       .astype(float)          # 数値化
+                       .fillna(0))
+
 summary_sales = pd.DataFrame({
     "レコードID":["",""], "取引先":["①月次売上合計","②平均売上単価"],
     **{c:[df_sales_p[c].sum(), df_sales_p[c].mean()] for c in time_cols}
@@ -311,35 +323,47 @@ std_hours_row    = {}
 
 if df_cost_raw is not None:
     # 対象列
-    cons_c  = detect_col(df_cost_raw.columns, ["コンサルタント","氏名","name"])
+    cons_c  = detect_col(df_cost_raw.columns, ["コンサルタント名","氏名","name"])
     hours_c = detect_col(df_cost_raw.columns, ["稼働時間","hours","workinghours","h"])
-    date_c  = detect_col(df_cost_raw.columns, ["日付","稼働日","date"])
+    date_c  = detect_col(df_cost_raw.columns, ["稼働月-月次","稼働月 - 月次","稼働日","date"])
+
     if cons_c and hours_c and date_c:
         dc = df_cost_raw[[cons_c, hours_c, date_c]].copy()
+
+        # 稼働時間を数値化
+        dc[hours_c] = (dc[hours_c].astype(str)
+                                   .str.replace(r"[^\d\.]", "", regex=True)
+                                   .replace("", "0")
+                                   .astype(float))
+
         dc[date_c] = pd.to_datetime(dc[date_c], errors="coerce")
+        dc = dc.dropna(subset=[date_c]) 
         dc["年月表示"] = dc[date_c].dt.strftime("%y/%m")
-        # フィルター期間
-        dc = dc[(dc[date_c].dt.date >= start_date) &
-                (dc[date_c].dt.date <= end_date)]
+
+        # ---------- 期間フィルタ：24/01 以降 ----------
+        util_time_cols = [c for c in sorted(dc["年月表示"].unique())
+                          if c >= "24/01"]
+        dc = dc[dc["年月表示"].isin(util_time_cols)]
+
         # 月次稼働時間
-        util_hours  = (dc.pivot_table(index=cons_c, columns="年月表示",
-                                      values=hours_c, aggfunc="sum",
-                                      fill_value=0)
-                       .reindex(columns=time_cols, fill_value=0))
+        util_hours = (dc.pivot_table(index=cons_c, columns="年月表示",
+                                     values=hours_c, aggfunc="sum",
+                                     fill_value=0)
+                      .reindex(columns=util_time_cols, fill_value=0))
         util_hours_pivot = util_hours.reset_index()
+
         # 標準稼働時間
-        for col in time_cols:
-            dt = datetime.strptime(col, "%y/%m")
-            _, last_day = calendar.monthrange(dt.year, dt.month)
-            wd = pd.date_range(dt.strftime("%Y-%m-01"),
-                               dt.strftime(f"%Y-%m-{last_day}"),
-                               freq="B").size
-            std_hours_row[col] = wd * 8
+        for col in util_time_cols:
+            y, m = 2000 + int(col[:2]), int(col[3:])
+            _, last = calendar.monthrange(y, m)
+            workdays = pd.date_range(f"{y}-{m:02d}-01",
+                                     f"{y}-{m:02d}-{last}", freq="B").size
+            std_hours_row[col] = workdays * 8
+
         # チャージャビリティ %
         util_pct = util_hours.copy()
-        for col in time_cols:
-            util_pct[col] = (util_pct[col] / std_hours_row[col]) \
-                            .replace([float("inf"), -float("inf")], 0)
+        for col in util_time_cols:
+            util_pct[col] = util_pct[col] / std_hours_row[col]
         util_pct_pivot = util_pct.reset_index()
     else:
         st.sidebar.warning("稼働コストに コンサル名 / 稼働時間 / 日付 列が見つかりません。")
@@ -367,35 +391,66 @@ with tab1:
 # ----- Table view ------------------------------------------------------------
 with tab2:
     st.subheader("📄 プロジェクト収益一覧")
-    show_cols = ["レコードID","取引先","売上高","粗利","粗利率"]
-    st.dataframe(df_filtered[show_cols], use_container_width=True)
-    st.download_button("💾 粗利集計CSV",
-                       data=df_filtered.to_csv(index=False, encoding="utf-8-sig"),
-                       file_name="粗利集計.csv")
+    # 表示列を拡張：レコードIDの後に日付最小・最大（YY/MM）を挿入
+    show_cols = [
+        "レコードID","日付（最小）","日付（最大）","取引先","取引名","取引担当者",
+        "Industry","Industry詳細","提案商材",
+        "売上高","人件費","外注費","交際費","旅費交通費",
+        "粗利","粗利率"
+    ]
+    df_disp = df_filtered[show_cols].copy()
+    # 日付最小・最大をYY/MM形式で表示
+    for c in ["日付（最小）","日付（最大）"]:
+        df_disp[c] = pd.to_datetime(df_disp[c], errors="coerce").dt.strftime("%y/%m")
+    # 数値をカンマ区切りでフォーマット
+    num_cols = ["売上高","人件費","外注費","交際費","旅費交通費","粗利"]
+    for c in num_cols:
+        df_disp[c] = df_disp[c].map(lambda x: f"{int(x):,}")
+    # 粗利率をパーセント表示
+    df_disp["粗利率"] = df_disp["粗利率"].map(lambda x: f"{x:.1f}%")
 
-    st.subheader("📋 月次売上 / 粗利")
+    st.dataframe(df_disp, use_container_width=True)
+    st.download_button(
+        "💾 粗利集計CSV",
+        data=df_filtered.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="粗利集計.csv"
+    )
+
+    # 月次売上
+    st.subheader("📋 月次売上")
     def _format(df):
         for c in time_cols:
-            df[c] = df[c].map(lambda x:f"{int(x):,}")
+            df[c] = df[c].map(lambda x: f"{int(x):,}")
         return df
-    st.dataframe(_format(df_sales_p.copy()),
-                 use_container_width=True)
+    st.dataframe(_format(df_sales_p.copy()), use_container_width=True)
+    st.download_button("💾 月次売上一覧CSV",
+        data=df_sales_p.to_csv(index=False, encoding="cp932"),
+        file_name="月次売上一覧.csv")
+
+    # 月次粗利
+    st.subheader("📋 月次粗利")
+    st.dataframe(_format(df_profit_p.copy()), use_container_width=True)
+    st.download_button("💾 月次粗利一覧CSV",
+                       data=df_profit_p.to_csv(index=False, encoding="cp932"),
+                       file_name="月次粗利一覧.csv")    
 
 # ----- Utilization view ------------------------------------------------------
 with tab3:
-    st.subheader("標準稼働時間 / 月")
+    # ① 標準稼働時間を折りたたみ + 小タイトル
     if std_hours_row:
-        std_df = pd.DataFrame([std_hours_row], index=["標準稼働時間(h)"])
-        st.table(std_df)
-    else:
-        st.info("稼働コストファイルに稼働時間が無いため利用率を計算できません。")
+        with st.expander("標準稼働時間 / 月", expanded=False):
+            st.caption("平日日数 × 8h")
+            st.table(pd.DataFrame([std_hours_row], index=["標準稼働時間(h)"]))
 
+    # ② 稼働・チャージャビリティ
     if not util_hours_pivot.empty:
         st.subheader("コンサルタント別・月次稼働時間 (h)")
         st.dataframe(util_hours_pivot, use_container_width=True)
 
         st.subheader("コンサルタント別・チャージャビリティ (%)")
-        pct_df = util_pct_pivot.copy()
-        for c in time_cols:
-            pct_df[c] = pct_df[c].map(lambda x:f"{x:.0%}")
-        st.dataframe(pct_df, use_container_width=True)
+        pct_fmt = util_pct_pivot.copy()
+        for c in util_time_cols:
+            pct_fmt[c] = pct_fmt[c].map(lambda x: f"{x:.0%}")
+        st.dataframe(pct_fmt, use_container_width=True)
+    else:
+        st.info("利用率を計算できるデータがありません。")
