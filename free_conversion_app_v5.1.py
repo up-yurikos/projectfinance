@@ -84,7 +84,7 @@ with st.sidebar.expander("📂 データアップロード / 選択", expanded=T
     tab_local, tab_drive = st.tabs(["ローカル CSV / ZIP", "Google Drive 共有リンク"])
 
     with tab_local:
-        uploaded_file = st.file_uploader("仕訳帳 (CSV / ZIP),journal", type=["csv", "zip"])
+        uploaded_file = st.file_uploader("仕訳帳 (CSV / ZIP), journal", type=["csv", "zip"])
 
     with tab_drive:
         gdrive_url = st.text_input("共有リンクを貼って Enter",
