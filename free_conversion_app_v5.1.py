@@ -84,7 +84,7 @@ with st.sidebar.expander("📂 データアップロード / 選択", expanded=T
     tab_local, tab_drive = st.tabs(["ローカル CSV / ZIP", "Google Drive 共有リンク"])
 
     with tab_local:
-        uploaded_file = st.file_uploader("仕訳帳 (CSV / ZIP)", type=["csv", "zip"])
+        uploaded_file = st.file_uploader("仕訳帳 (CSV / ZIP),journal", type=["csv", "zip"])
 
     with tab_drive:
         gdrive_url = st.text_input("共有リンクを貼って Enter",
@@ -96,8 +96,8 @@ with st.sidebar.expander("📂 データアップロード / 選択", expanded=T
     st.markdown("---")
 
     # 取引マスタ / 稼働コスト
-    cost_file   = st.file_uploader("稼働コスト (CSV)", type="csv")
-    master_file = st.file_uploader("取引マスタ (CSV)", type="csv")
+    cost_file   = st.file_uploader("稼働コスト (CSV), utilization", type="csv")
+    master_file = st.file_uploader("取引マスタ (CSV), transaction", type="csv")
 
 
 # ──────────────────────────────────────────────
