@@ -99,7 +99,68 @@ with st.sidebar.expander("📂 データアップロード / 選択", expanded=T
     cost_file   = st.file_uploader("稼働コスト (CSV), utilization", type="csv")
     master_file = st.file_uploader("取引マスタ (CSV), transaction", type="csv")
 
-
+# ──────────────────────────────────────────────
+# ファイル未アップロード時のガイダンス表示
+# ──────────────────────────────────────────────
+# 取引帳（journal）、稼働コスト（utilization）、取引マスタ（transaction）が
+# いずれも選択されておらず、Googleドライブリンクも空文字のときに表示
+guidance_condition = (
+    (uploaded_file is None) and
+    (cost_file is None) and
+    (master_file is None) and
+    (not gdrive_url)
+)
+if guidance_condition:
+    st.markdown("## Read me: アップロードデータの取得方法")
+    # カード用共通スタイル
+    card_style = (
+        "background-color:rgba(173,230,180,0.2);"
+        "padding:32px;"
+        "border-radius:8px;"
+        "margin-bottom:16px;"
+    )
+    # カード１：仕訳帳
+    st.markdown(
+        f"""
+        <div style="{card_style}">
+        <h4>仕訳帳（journal）</h4>
+        <ol style="padding-left:16px; margin-top:0; margin-bottom:0;">
+          <li>Freeeにて「会計帳簿」＞「仕訳帳」を開く</li>
+          <li>取引日を任意の期間に設定</li>
+          <li>「インポート・エクスポート」＞「CSV・PDFエクスポート」＞「（新）CSV」＞Shift_JIS＞出力でファイルダウンロード</li>
+          <li>ファイル名を <strong>"journal"</strong> に変更</li>
+        </ol>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    # カード２：稼働コスト
+    st.markdown(
+        f"""
+        <div style="{card_style}">
+        <h4>稼働コスト（utilization）</h4>
+        <ol style="padding-left:16px; margin-top:0; margin-bottom:0;">
+          <li>HubSpotより「UP社員/アサイン履歴」レポートをCSVエクスポート</li>
+          <li>ファイル名を <strong>"utilization"</strong> に変更</li>
+        </ol>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    # カード３：取引マスタ
+    st.markdown(
+        f"""
+        <div style="{card_style}">
+        <h4>取引マスタ（transaction）</h4>
+        <ol style="padding-left:16px; margin-top:0; margin-bottom:0;">
+          <li>HubSpotより「CRM」＞「取引」からすべての取引をCSVエクスポート</li>
+          <li>ファイル名を <strong>"transaction"</strong> に変更</li>
+        </ol>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
 # ──────────────────────────────────────────────
 # 仕訳帳読込
 # ──────────────────────────────────────────────
