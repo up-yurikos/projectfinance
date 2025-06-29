@@ -1,3 +1,11 @@
+import streamlit as st
+import pandas as pd
+import zipfile, io, re, tempfile, gdown, calendar
+from datetime import date, datetime
+from dateutil.relativedelta import relativedelta
+from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid.shared import GridUpdateMode
+
 # ──────────────────────────────────────────────
 # 固定マッピング : RecordID (B列) ➜ DealID (C列)
 #   ※ 2025-05-22T07-15_export_modified.xlsx から自動抽出（104件）
