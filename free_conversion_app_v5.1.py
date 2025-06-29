@@ -1,15 +1,134 @@
-import streamlit as st
-import pandas as pd
-import zipfile, io, re, tempfile, gdown, calendar
-from datetime import date, datetime
-from dateutil.relativedelta import relativedelta
-from st_aggrid import AgGrid, GridOptionsBuilder
-from st_aggrid.shared import GridUpdateMode
+# ──────────────────────────────────────────────
+# 固定マッピング : RecordID (B列) ➜ DealID (C列)
+#   ※ 2025-05-22T07-15_export_modified.xlsx から自動抽出（104件）
+#   ※ 追加・修正はこの dict に追記してください
+# ──────────────────────────────────────────────
+ID_MAP_FIXED = {
+    'AKE202210_KEIEI_U': '9775650935',
+    'AMA202211_SYSTEM_P': '13111634538',
+    'AMA202304_2BREPO_P': '13111594792',
+    'AMA202304_ECREPO_P': '13111634452',
+    'AMA202304_ECSYST_P': '13111594849',
+    'AMA202305_BILLIN_P': '13334264959',
+    'AMA202306_SCMPMO_P': '13826848558',
+    'AMA202307_ELSIGN_P': '13965251380',
+    'AMA202307_MGTADV_U': '13906057056',
+    'ARA202308_JIGYOU_P': '12746802825',
+    'BRI202309_OTHERS_P': '12850387035',
+    'BRI202310_PMOSUP_P': '16033621034',
+    'CLE202304_CDMOTR_U': '13523440943',
+    'DAI202309_OTHERS_P': '15098798720',
+    'DEK202307_OTHERS_P': '12911619969',
+    'DEK202308_OTHERS_U': '13964560773',
+    'DEK202312_FASMAA_U': '16351470488',
+    'DEK202312_OTHERS_U': '16037489190',
+    'DEN202210_JIGYOU_P': '10172816231',
+    'DEN202302_JIGYOU_U': '12030335245',
+    'DEN202309_JIGYOU_P': '13909275047',
+    'DEN202309_OTHERS_P': '14767850896',
+    'ELN202303_VISASQ_U': '12602652171',
+    'FAN202302_HOKUBE_U': '11770846345',
+    'FUJ202302_JIGYOU_U': '12158729512',
+    'FUT202308_DXSTRA_P': '14148089088',
+    'HIR202211_ESSYST_P': '10362965791',
+    'HIR202302_ESCONS_U': '12073670611',
+    'HIR202302_JIGYOU_U': '12073670418',
+    'HIR202302_JPSGAN_U': '12073670158',
+    'HIR202303_JIGYOU_U': '12170849132',
+    'HIR202304_JIGYOU_U': '12223160017',
+    'HIR202305_JIGYOU_U': '12363647079',
+    'HIR202306_JIGYOU_U': '12515803893',
+    'HIR202307_JIGYOU_U': '13111138855',
+    'HIR202308_OTHERS_U': '13739060018',
+    'HIR202309_JIGYOU_U': '13964605132',
+    'HIT202302_JIGYOU_U': '11934460122',
+    'HIT202304_DXCONS_U': '12394681781',
+    'HIT202305_OTHERS_P': '12394681487',
+    'HIT202306_OTHERS_P': '12561539312',
+    'HIT202307_OTHERS_P': '13111138884',
+    'HIT202308_OTHERS_P': '13737542047',
+    'HIT202309_OTHERS_P': '14767850830',
+    'INM202307_DXCONS_P': '12747279127',
+    'INM202309_DXCONS_P': '14767043959',
+    'JDC202308_JIGYOU_U': '13739310719',
+    'JDC202309_OTHERS_U': '14671654128',
+    'KAK202303_DXMKTG_P': '12561292342',
+    'KAK202304_SUSTAI_P': '12223160034',
+    'KAK202306_OTHERS_P': '12665061861',
+    'KAK202307_OTHERS_P': '12910901831',
+    'KAK202308_OTHERS_P': '13739059963',
+    'KAK202309_OTHERS_P': '14671654171',
+    'KOK202306_OTHERS_P': '12910901839',
+    'KOK202307_OTHERS_P': '12910901845',
+    'KOK202308_OTHERS_P': '13737542079',
+    'KOK202309_OTHERS_P': '14671654191',
+    'KYO202210_MDTYPE_P': '10172816310',
+    'KYO202303_OTHERS_P': '12561292366',
+    'KYO202304_OTHERS_P': '12257979771',
+    'LIF202308_OTHERS_P': '14148089119',
+    'LIF202309_OTHERS_P': '15100050932',
+    'MIK202308_OTHERS_P': '13737542093',
+    'MON202210_TAXSPA_P': '10455428996',
+    'MON202211_TAXSPA_P': '10455429076',
+    'MON202301_TAXSPA_P': '11770846395',
+    'MON202302_TAXSPA_P': '12158729536',
+    'MON202303_OTHERS_P': '12456413016',
+    'MON202304_OTHERS_P': '12223160047',
+    'MON202306_TAXSPA_P': '12561539221',
+    'MON202307_OTHERS_P': '12911619960',
+    'MON202308_OTHERS_P': '13737542107',
+    'MON202309_OTHERS_P': '15100050944',
+    'NIT202210_OPMKTG_P': '10172590823',
+    'NRI202210_DXCONS_P': '10172816325',
+    'NSS202302_DXSTRA_P': '11770846424',
+    'NSS202306_OTHERS_P': '12561539273',
+    'NSS202307_OTHERS_P': '12911220631',
+    'NSS202308_OTHERS_P': '13739060041',
+    'NSS202309_OTHERS_P': '13964605170',
+    'OKI202307_OTHERS_P': '12911619977',
+    'OKI202308_OTHERS_P': '13739060051',
+    'OKI202309_OTHERS_P': '14671654213',
+    'RIC202309_OTHERS_P': '14767171462',
+    'RYO202308_DXSTRA_P': '14148089146',
+    'SHP202210_DXSTRA_P': '10455429113',
+    'SHP202307_OTHERS_P': '12910901871',
+    'SHP202308_OTHERS_P': '13737542123',
+    'SHP202309_OTHERS_P': '14767850911',
+    'SMB202210_JIGYOU_P': '10172816344',
+    'SMB202302_JIGYOU_U': '11770846443',
+    'SMB202304_JIGYOU_P': '12257979795',
+    'SMB202306_JIGYOU_P': '12602652214',
+    'SMB202307_JIGYOU_P': '12910901890',
+    'SMB202308_JIGYOU_P': '13737542137',
+    'SMB202309_JIGYOU_P': '14768031259',
+    'SMT202210_SYSMIG_P': '10172816352',
+    'SMT202210_SYSTUN_P': '10172816371',
+    'SMT202212_JIGYOU_P': '10363337802',
+    'SMT202303_JIGYOU_P': '12561292418',
+    'SMT202304_JIGYOU_P': '12257979805',
+    'SMT202305_OTHERS_P': '12394681563',
+    'SMT202306_OTHERS_P': '12561539286',
+    'SMT202307_OTHERS_P': '12911220662',
+    'SMT202308_OTHERS_P': '13739060064',
+    'SMT202309_OTHERS_P': '13964605187',
+    'SNS202309_OTHERS_P': '13964605191',
+    'TAX202210_OTHERS_P': '10455429145',
+    'TAX202302_HOKUBE_U': '11770846459',
+    'TSC202301_SYSTEM_P': '9739381018',
+    'TTS202304_JIGRESEAC_P': '12783695123',
+    'TTS202306_VISASQ_U': '13374247579',
+    'UAC202308_OTHERS_P': '13963049397',
+    'UAC202307_OTHERS_P': '13411248700',
+    'YON202301_DXSTRA_P': '12456413034',
+    'YON202308_OTHERS_U': '13737542160',
+    'YON202309_DXSTRA_P': '14446752905',
+    'YON202312_DXSTRA_P': '15481667376'
+}
 
 # ──────────────────────────────────────────────
 # ページ設定
 # ──────────────────────────────────────────────
-st.set_page_config(page_title="プロジェクト収益 v7.1", layout="wide")
+st.set_page_config(page_title="プロジェクト収益 v7.2", layout="wide")
 
 # ──────────────────────────────────────────────
 # 共通ユーティリティ
@@ -102,8 +221,6 @@ with st.sidebar.expander("📂 データアップロード / 選択", expanded=T
 # ──────────────────────────────────────────────
 # ファイル未アップロード時のガイダンス表示
 # ──────────────────────────────────────────────
-# 取引帳（journal）、稼働コスト（utilization）、取引マスタ（transaction）が
-# いずれも選択されておらず、Googleドライブリンクも空文字のときに表示
 guidance_condition = (
     (uploaded_file is None) and
     (cost_file is None) and
@@ -112,14 +229,12 @@ guidance_condition = (
 )
 if guidance_condition:
     st.markdown("## Read me: アップロードデータの取得方法")
-    # カード用共通スタイル
     card_style = (
         "background-color:rgba(173,230,180,0.2);"
         "padding:32px;"
         "border-radius:8px;"
         "margin-bottom:16px;"
     )
-    # カード１：仕訳帳
     st.markdown(
         f"""
         <div style="{card_style}">
@@ -134,7 +249,6 @@ if guidance_condition:
         """,
         unsafe_allow_html=True
     )
-    # カード２：稼働コスト
     st.markdown(
         f"""
         <div style="{card_style}">
@@ -147,7 +261,6 @@ if guidance_condition:
         """,
         unsafe_allow_html=True
     )
-    # カード３：取引マスタ
     st.markdown(
         f"""
         <div style="{card_style}">
@@ -160,7 +273,7 @@ if guidance_condition:
         """,
         unsafe_allow_html=True
     )
-    
+
 # ──────────────────────────────────────────────
 # 仕訳帳読込
 # ──────────────────────────────────────────────
@@ -175,6 +288,12 @@ elif gdrive_url:
 if df_src is None:
     st.stop()
 df_src["取引日"] = pd.to_datetime(df_src["取引日"], errors="coerce")
+
+# ---------- RecordID → DealID 置換（固定マッピング） ----------
+TARGET_COLS = ["貸方部門", "借方部門"]
+for col in TARGET_COLS:
+    if col in df_src.columns:
+        df_src[col] = df_src[col].map(lambda x: ID_MAP_FIXED.get(normalize_id(x), x))
 
 # 取引マスタ読込 -----------------------------------------------------
 master_map = None
