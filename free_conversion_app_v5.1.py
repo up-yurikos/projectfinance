@@ -8,8 +8,6 @@ from st_aggrid.shared import GridUpdateMode
 
 # ──────────────────────────────────────────────
 # 固定マッピング : RecordID (B列) ➜ DealID (C列)
-#   ※ 2025-05-22T07-15_export_modified.xlsx から自動抽出（104件）
-#   ※ 追加・修正はこの dict に追記してください
 # ──────────────────────────────────────────────
 ID_MAP_FIXED = {
     'AKE202210_KEIEI_U': '9775650935',
